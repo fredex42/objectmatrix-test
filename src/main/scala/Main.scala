@@ -1,6 +1,10 @@
+import java.io.File
+import java.time.{Instant, ZoneId, ZonedDateTime}
+
 import akka.actor.ActorSystem
-import akka.stream.scaladsl.{Broadcast, GraphDSL, Merge, RunnableGraph, Sink}
+import akka.stream.scaladsl.{Broadcast, FileIO, GraphDSL, Merge, RunnableGraph, Sink}
 import akka.stream.{ActorMaterializer, Attributes, ClosedShape, Materializer, SourceShape}
+import akka.util.ByteString
 import com.om.mxs.client.japi.{Attribute, SearchTerm, UserInfo}
 import helpers.ZonedDateTimeEncoder
 import org.slf4j.LoggerFactory
@@ -20,11 +24,31 @@ object Main extends ZonedDateTimeEncoder {
     case _=>System.exit(exitCode)
   })
 
+  def attributesToCSV(maybeAttribs: Option[MxsMetadata]) = maybeAttribs match {
+    case None=>"\n"
+    case Some(attribs)=>
+      val allValues = List("MXFS_FILENAME_UPPER","SHA-256","MXFS_USERNAME","MXFS_PATH","MXFS_FILENAME","MXFS_DESCRIPTION")
+        .map(key=>attribs.stringValues.getOrElse(key, "-"))
+        .map(str=>"\"" + str + "\"") ++
+      List("MXFS_INTRASH").map(key=>attribs.boolValues.get(key)
+        .map(value=>if(value) "true" else "false").getOrElse("-")) ++
+      List("MXFS_MODIFICATION_TIME","MXFS_CREATION_TIME","MXFS_ACCESS_TIME","MXFS_ARCHIVE_TIME")
+        .map(key=>attribs.longValues.get(key)
+          .map(value=>ZonedDateTime.ofInstant(Instant.ofEpochMilli(value), ZoneId.systemDefault()).toString).
+          getOrElse("-")) ++
+      List("DPSP_SIZE").map(key=>attribs.longValues.get(key).map(_.toString).getOrElse("-")) ++
+      List("MXFS_CREATIONDAY","MXFS_ARCHMONTH","MXFS_COMPATIBLE","MXFS_ARCHYEAR","MXFS_ARCHDAY","MXFS_CREATIONMONTH","MXFS_CREATIONYEAR")
+        .map(key=>attribs.intValues.get(key).map(_.toString).getOrElse("-"))
+
+      allValues.mkString(",")+"\n"
+  }
+
   def getStream(userInfo:UserInfo, parallelism:Int) = {
     val searchTerm = SearchTerm.createNOTTerm(SearchTerm.createSimpleTerm("oid",""))
-    val sinkFactory = Sink.foreach[ObjectMatrixEntry](elem=>
-      println(elem.attributes.asJson)
-    )
+//    val sinkFactory = Sink.foreach[ObjectMatrixEntry](elem=>
+//      println(elem.attributes.asJson)
+//    )
+    val sinkFactory = FileIO.toPath(new File("report.csv").toPath)
 
     GraphDSL.create(sinkFactory) { implicit builder=> sink=>
       import akka.stream.scaladsl.GraphDSL.Implicits._
@@ -39,13 +63,14 @@ object Main extends ZonedDateTimeEncoder {
         val lookup = builder.add(new OMLookupMetadata().async)
         splitter.out(i) ~> lookup ~> merger.in(i)
       }
-      merger ~> sink
+      merger.out.map(entry=>attributesToCSV(entry.attributes)).map(line=>ByteString(line)) ~> sink
 
       ClosedShape
     }
   }
 
   def main(args:Array[String]):Unit = {
+    try {
     UserInfoBuilder.fromFile(args(0)) match {
       case Failure(err)=>
         logger.error(s"Could not connect: ", err)
@@ -53,7 +78,7 @@ object Main extends ZonedDateTimeEncoder {
       case Success(userInfo)=>
         logger.info(s"Connected with $userInfo")
 
-        RunnableGraph.fromGraph(getStream(userInfo,4)).run().andThen({
+        RunnableGraph.fromGraph(getStream(userInfo,1)).run().andThen({
           case Success(noResult)=>
             logger.info(s"Completed stream")
             terminate(0)
@@ -62,6 +87,11 @@ object Main extends ZonedDateTimeEncoder {
             terminate(1)
 
         })
+    }
+  } catch {
+      case err:Throwable=>
+        logger.error("",err)
+        terminate(255)
     }
   }
 }

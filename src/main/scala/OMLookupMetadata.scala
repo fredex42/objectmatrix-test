@@ -83,13 +83,22 @@ class OMLookupMetadata(implicit mat:Materializer, ec:ExecutionContext) extends G
           val vault = elem.vault
           val obj = vault.getObject(elem.oid)
 
-          getAttributeMetadata(obj).onComplete({
-            case Success(meta)=>
-              completeCb.invoke((elem, meta, getMxfsMetadata(obj)))
-            case Failure(exception)=>
-              logger.error(s"Could not look up metadata: ", exception)
-              failedCb.invoke(exception)
-          })
+          def getAttributeMetadataWithRetry(attempt:Int=1):Unit = {
+            getAttributeMetadata(obj).onComplete({
+              case Success(meta) =>
+                completeCb.invoke((elem, meta, getMxfsMetadata(obj)))
+              case Failure(exception) =>
+                logger.error(s"Could not look up metadata: ", exception)
+                if(attempt<10){
+                  Thread.sleep(500)
+                  getAttributeMetadataWithRetry(attempt+1)
+                } else {
+                  failedCb.invoke(exception)
+                }
+            })
+          }
+
+          getAttributeMetadataWithRetry()
 
         } catch {
           case err:Throwable=>
