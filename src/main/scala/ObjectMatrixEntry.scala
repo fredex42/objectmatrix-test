@@ -1,3 +1,3 @@
 import com.om.mxs.client.japi.{MXFSFileAttributes, Vault}
 
-case class ObjectMatrixEntry(oid:String, vault:Vault, attributes:Option[Map[String,Any]], fileAttribues:Option[FileAttributes])
+case class ObjectMatrixEntry(oid:String, vault:Vault, attributes:Option[MxsMetadata], fileAttribues:Option[FileAttributes])

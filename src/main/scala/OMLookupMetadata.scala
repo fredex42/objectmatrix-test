@@ -8,6 +8,11 @@ import scala.collection.JavaConverters._
 import scala.concurrent.ExecutionContext
 import scala.util.{Failure, Success}
 
+/**
+  * look up metadata for the given objectmatrix entry
+  * @param mat
+  * @param ec
+  */
 class OMLookupMetadata(implicit mat:Materializer, ec:ExecutionContext) extends GraphStage[FlowShape[ObjectMatrixEntry,ObjectMatrixEntry]] {
   private final val in:Inlet[ObjectMatrixEntry] = Inlet.create("OMLookupMetadata.in")
   private final val out:Outlet[ObjectMatrixEntry] = Outlet.create("OMLookupMetadata.out")
@@ -17,20 +22,44 @@ class OMLookupMetadata(implicit mat:Materializer, ec:ExecutionContext) extends G
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
     private val logger = LoggerFactory.getLogger(getClass)
 
+    /**
+      * iterates the available metadata and presents it as a dictionary
+      * @param obj [[MxsObject]] entity to retrieve information from
+      * @param mat implicitly provided materializer for streams
+      * @param ec implicitly provided execution context
+      * @return a Future, with the relevant map
+      */
     def getAttributeMetadata(obj:MxsObject)(implicit mat:Materializer, ec:ExecutionContext) = {
       val view = obj.getAttributeView
 
-      val sink = Sink.fold[Seq[(String,AnyRef)],(String,AnyRef)](Seq())((acc,elem)=>acc++Seq(elem))
-
+      //val sink = Sink.fold[Seq[(String,AnyRef)],(String,AnyRef)](Seq())((acc,elem)=>acc++Seq(elem))
+      val sink = Sink.fold[MxsMetadata,(String,Any)](MxsMetadata(Map(),Map(),Map(),Map()))((acc,elem)=>{
+        elem._2 match {
+          case boolValue: Boolean => acc.copy(boolValues = acc.boolValues ++ Map(elem._1->boolValue))
+          case intValue:Int => acc.copy(intValues = acc.intValues ++ Map(elem._1 -> intValue))
+          case longValue:Long => acc.copy(longValues = acc.longValues ++ Map(elem._1 -> longValue))
+          case stringValue:String => acc.copy(stringValues = acc.stringValues ++ Map(elem._1 -> stringValue))
+          case _=>
+            try {
+              logger.warn(s"Could not get metadata value for ${elem._1} on ${obj.getId}, type ${elem._2.getClass.toString} not recognised")
+            } catch {
+              case err:Throwable=>
+            }
+            acc
+        }
+      })
       Source.fromIterator(()=>view.iterator.asScala)
         .map(elem=>(elem.getKey, elem.getValue))
         .toMat(sink)(Keep.right)
         .run()
-        .map(_.toMap)
-
-//      view.list().asScala.map(key=>(key, view.readString(key))).toMap
+      //.map()
     }
 
+    /**
+      * get the MXFS file metadata
+      * @param obj [[MxsObject]] entity to retrieve information from
+      * @return
+      */
     def getMxfsMetadata(obj:MxsObject) = {
       val view = obj.getMXFSFileAttributeView
       view.readAttributes()
@@ -40,7 +69,7 @@ class OMLookupMetadata(implicit mat:Materializer, ec:ExecutionContext) extends G
       override def onPush(): Unit = {
         val elem=grab(in)
 
-        val completeCb = getAsyncCallback[(ObjectMatrixEntry,Map[String,Any],MXFSFileAttributes)](argTuple=>{
+        val completeCb = getAsyncCallback[(ObjectMatrixEntry,MxsMetadata,MXFSFileAttributes)](argTuple=>{
           val updated = argTuple._1.copy(
             attributes = Some(argTuple._2),
             fileAttribues = Some(FileAttributes(argTuple._3))
