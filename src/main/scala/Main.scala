@@ -5,7 +5,7 @@ import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Broadcast, FileIO, GraphDSL, Merge, RunnableGraph, Sink}
 import akka.stream.{ActorMaterializer, Attributes, ClosedShape, Materializer, SourceShape}
 import akka.util.ByteString
-import com.om.mxs.client.japi.{Attribute, SearchTerm, UserInfo}
+import com.om.mxs.client.japi.{Attribute, MatrixStore, SearchTerm, UserInfo}
 import helpers.ZonedDateTimeEncoder
 import org.slf4j.LoggerFactory
 
@@ -69,6 +69,23 @@ object Main extends ZonedDateTimeEncoder {
     }
   }
 
+//  def removeEverythingStream(userInfo:UserInfo) = {
+//    val searchTerm = SearchTerm.createNOTTerm(SearchTerm.createSimpleTerm("oid",""))
+//    val sinkFactory = Sink.fold[Int,String](0)((acc,entry)=>acc+1)
+//    val vault = MatrixStore.openVault(userInfo)
+//
+//    GraphDSL.create(sinkFactory) { implicit builder=> counterSink=>
+//      import akka.stream.scaladsl.GraphDSL.Implicits._
+//      val src = builder.add(new OMSearchSource(userInfo,searchTerm))
+//      val splitter = builder.add(Broadcast[String](2,true))
+//      val deleteSink = builder.add(new OMDeleteSink(vault))
+//
+//      src.out.map(_.oid) ~> splitter ~> counterSink
+//      splitter.out(1) ~> deleteSink
+//      ClosedShape
+//    }
+//  }
+
   def main(args:Array[String]):Unit = {
     try {
     UserInfoBuilder.fromFile(args(0)) match {
@@ -87,6 +104,14 @@ object Main extends ZonedDateTimeEncoder {
             terminate(1)
 
         })
+//        RunnableGraph.fromGraph(removeEverythingStream(userInfo)).run().andThen({
+//          case Success(count)=>
+//            logger.info(s"Completed delete everything. Removed $count entries.")
+//            terminate(0)
+//          case Failure(err)=>
+//            logger.error(s"Could not run delete everything", err)
+//            terminate(1)
+//        })
     }
   } catch {
       case err:Throwable=>
