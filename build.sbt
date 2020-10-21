@@ -2,6 +2,8 @@ name := "objectmatrix-test"
 
 version := "0.1"
 
+enablePlugins(JavaAppPackaging)
+
 scalaVersion := "2.12.3"
 
 val akkaVersion = "2.5.22"
