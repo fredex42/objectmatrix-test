@@ -1,11 +1,10 @@
 import java.io.File
 import java.time.{Instant, ZoneId, ZonedDateTime}
-
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Broadcast, FileIO, GraphDSL, Merge, RunnableGraph, Sink}
 import akka.stream.{ActorMaterializer, Attributes, ClosedShape, Materializer, SourceShape}
 import akka.util.ByteString
-import com.om.mxs.client.japi.{Attribute, MatrixStore, SearchTerm, UserInfo}
+import com.om.mxs.client.japi.{Attribute, Constants, MatrixStore, SearchTerm, UserInfo}
 import helpers.ZonedDateTimeEncoder
 import org.slf4j.LoggerFactory
 
@@ -27,7 +26,7 @@ object Main extends ZonedDateTimeEncoder {
   def attributesToCSV(maybeAttribs: Option[MxsMetadata]) = maybeAttribs match {
     case None=>"\n"
     case Some(attribs)=>
-      val allValues = List("MXFS_FILENAME_UPPER","SHA-256","MXFS_USERNAME","MXFS_PATH","MXFS_FILENAME","MXFS_DESCRIPTION")
+      val allValues = List("MXFS_FILENAME_UPPER","GNM_PROJECT_ID","MXFS_USERNAME","MXFS_PATH","MXFS_FILENAME","MXFS_DESCRIPTION")
         .map(key=>attribs.stringValues.getOrElse(key, "-"))
         .map(str=>"\"" + str + "\"") ++
       List("MXFS_INTRASH").map(key=>attribs.boolValues.get(key)
@@ -43,45 +42,30 @@ object Main extends ZonedDateTimeEncoder {
       allValues.mkString(",")+"\n"
   }
 
-  def getStream(userInfo:UserInfo, parallelism:Int) = {
-    val searchTerm = SearchTerm.createNOTTerm(SearchTerm.createSimpleTerm("oid",""))
-//    val sinkFactory = Sink.foreach[ObjectMatrixEntry](elem=>
-//      println(elem.attributes.asJson)
-//    )
+//  val interestingFields = Array(
+//    "MXFS_FILENAME_UPPER","GNM_PROJECT_ID","MXFS_USERNAME","MXFS_PATH","MXFS_FILENAME","MXFS_DESCRIPTION",
+//    "MXFS_INTRASH","MXFS_MODIFICATION_TIME","MXFS_CREATION_TIME","MXFS_ACCESS_TIME","MXFS_ARCHIVE_TIME",
+//    "DPSP_SIZE","MXFS_CREATIONDAY","MXFS_ARCHMONTH","MXFS_COMPATIBLE","MXFS_ARCHYEAR","MXFS_ARCHDAY","MXFS_CREATIONMONTH","MXFS_CREATIONYEAR"
+//  )
+
+  val interestingFields = Array(
+    "MXFS_FILENAME_UPPER","MXFS_FILENAME",
+  )
+  def getStream(userInfo:UserInfo, parallelism:Int, maybeSearchParam:Option[String]) = {
+    //val searchTerm = SearchTerm.createNOTTerm(SearchTerm.createSimpleTerm("oid",""))
+
+    val searchTerm = Seq(
+      maybeSearchParam.getOrElse("*"),
+      s"keywords: ${interestingFields.mkString(",")}").mkString("\n")
     val sinkFactory = FileIO.toPath(new File("report.csv").toPath)
 
     GraphDSL.create(sinkFactory) { implicit builder=> sink=>
       import akka.stream.scaladsl.GraphDSL.Implicits._
-      val src = builder.add(new OMSearchSource(userInfo,searchTerm))
-      val splitter = builder.add(new Broadcast[ObjectMatrixEntry](parallelism,true))
-      //val lookup = builder.add(new OMLookupMetadata)
-      val merger = builder.add(new Merge[ObjectMatrixEntry](parallelism, false))
+      val src = builder.add(new OMFastContentSearchSource(userInfo,searchTerm))
 
-      src ~> splitter
-
-      for(i<- 0 to parallelism-1) {
-        val lookup = builder.add(new OMLookupMetadata().async)
-        splitter.out(i) ~> lookup ~> merger.in(i)
-      }
-      merger.out.map(entry=>attributesToCSV(entry.attributes)).map(line=>ByteString(line)) ~> sink
-
-      ClosedShape
-    }
-  }
-
-  def removeEverythingStream(userInfo:UserInfo) = {
-    val searchTerm = SearchTerm.createNOTTerm(SearchTerm.createSimpleTerm("oid",""))
-    val sinkFactory = Sink.fold[Int,String](0)((acc,entry)=>acc+1)
-    val vault = MatrixStore.openVault(userInfo)
-
-    GraphDSL.create(sinkFactory) { implicit builder=> counterSink=>
-      import akka.stream.scaladsl.GraphDSL.Implicits._
-      val src = builder.add(new OMSearchSource(userInfo,searchTerm))
-      val splitter = builder.add(Broadcast[String](2,true))
-      val deleteSink = builder.add(new OMDeleteSink(vault))
-
-      src.out.map(_.oid) ~> splitter ~> counterSink
-      splitter.out(1) ~> deleteSink
+      src.out
+        .map(entry=>attributesToCSV(entry.attributes))
+        .map(line=>ByteString(line)) ~> sink
       ClosedShape
     }
   }
@@ -95,8 +79,14 @@ object Main extends ZonedDateTimeEncoder {
       case Success(userInfo)=>
         logger.info(s"Connected with $userInfo")
 
-        RunnableGraph.fromGraph(getStream(userInfo,1)).run().andThen({
-          case Success(noResult)=>
+        val searchParam = if(args.length>1) {
+          Some(args(1))
+        } else {
+          None
+        }
+
+        RunnableGraph.fromGraph(getStream(userInfo,1, searchParam)).run().andThen({
+          case Success(_)=>
             logger.info(s"Completed stream")
             terminate(0)
           case Failure(err)=>
@@ -104,15 +94,7 @@ object Main extends ZonedDateTimeEncoder {
             terminate(1)
 
         })
-//        RunnableGraph.fromGraph(removeEverythingStream(userInfo)).run().andThen({
-//          case Success(count)=>
-//            logger.info(s"Completed delete everything. Removed $count entries.")
-//            terminate(0)
-//          case Failure(err)=>
-//            logger.error(s"Could not run stream", err)
-//            terminate(1)
-//
-//        })
+
     }
   } catch {
       case err:Throwable=>

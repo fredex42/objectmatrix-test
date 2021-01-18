@@ -35,6 +35,7 @@ class OMSearchSource (userInfo:UserInfo, searchTerm:SearchTerm, atOnce:Int=10) e
             case Some(iter) =>
               if (iter.hasNext) {
                 val oid = iter.next()
+                logger.debug(s"Got oid $oid")
                 val elem = ObjectMatrixEntry(oid, vault.get, None,None)
                 push(out, elem)
                 ctr+=1
@@ -61,7 +62,10 @@ class OMSearchSource (userInfo:UserInfo, searchTerm:SearchTerm, atOnce:Int=10) e
         }
       }
 
-      override def postStop(): Unit = promise.success(ctr)
+      override def postStop(): Unit = {
+        promise.success(ctr)
+        if(vault.isDefined) vault.get.dispose()
+      }
     }
 
     (logic, promise.future)
